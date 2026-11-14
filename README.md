@@ -30,7 +30,7 @@ flowchart LR
 
 ### Hardware
 
-See [docs/BOM.md](docs/BOM.md). In short: an ES3C40P 4.0" ESP32-S3 display board, a PN532 NFC module, a 4-pin MX1.25 cable and NFC tags.
+See [docs/BOM.md](docs/BOM.md). In short: an ES3C40P 4.0" ESP32-S3 display board, a PN532 NFC module, a 4-pin MX1.25 cable and NFC tags. A printable case is in [hardware/case](hardware/case/README.md).
 
 ### Wiring
 
@@ -134,4 +134,4 @@ The config does not need Home Assistant for the assign flow. Delete the `homeass
 - Shows one AMS unit (four slots). Multiple units or an AMS HT need more tiles and the unit index changes.
 - The tag lookup downloads Spoolman's whole spool list on every scan. That is fine for a typical collection, but it grows with the number of spools.
 - Plain HTTP on a trusted LAN only.
-- No enclosure files are included.
+- The printable case is included, but the TPU washers it uses are not yet. See [hardware/case](hardware/case/README.md).

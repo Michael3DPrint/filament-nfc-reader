@@ -27,6 +27,6 @@ Parts used in the working build. No part here needs a soldered PCB of your own.
 | ESP32-S3-DevKitC-1, N16R8 (CP2102 USB-C) | Used to prove the PN532 and ESPHome setup before moving to the display board. |
 | Breadboard | Used with the DevKitC. |
 
-## Not included
+## Case
 
-- A printable enclosure. The display board is about 61 x 112 x 10.8 mm. Design or find a case that leaves the PN532 antenna facing the spool tag.
+Print the rigid parts from [hardware/case](../hardware/case/README.md) in PLA. The design also uses TPU washers, which are not in the repo yet.
