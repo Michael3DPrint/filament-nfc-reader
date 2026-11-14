@@ -1,0 +1,818 @@
+# Filament Selector
+# ESP32-S3 touchscreen + PN532 NFC reader: shows what is loaded in a Bambu Lab AMS,
+# lets you tap a slot, scan a spool's NFC tag, and assign that spool to the slot.
+#
+# See ../README.md for wiring, required services and setup.
+# Search this file for "CHANGE ME" to find the values you must edit.
+
+substitutions:
+  bambuddy_url: http://YOUR-BAMBUDDY-HOST:8000   # CHANGE ME: address of your Bambuddy server
+  spoolman_url: http://YOUR-SPOOLMAN-HOST:7912   # CHANGE ME: address of your Spoolman server
+  printer_id: "1"                                # CHANGE ME: your printer's id in Bambuddy
+  # Spools live in Spoolman (via Bambuddy's Spoolman integration), so assign through its slot endpoint.
+  # To use Bambuddy's built-in inventory instead, switch to:
+  #   assign_path: /api/v1/inventory/assignments
+  #   assign_id_field: spool_id
+  assign_path: /api/v1/spoolman/inventory/slot-assignments
+  assign_id_field: spoolman_spool_id
+
+esphome:
+  name: filament-selector
+  friendly_name: Filament Selector
+
+esp32:
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+# 8MB octal PSRAM on the N16R8 module. Needed for the LVGL draw buffer.
+# If the board bootloops, change mode to quad.
+psram:
+  mode: octal
+  speed: 80MHz
+
+# HTTP client used for the Spoolman and Bambuddy calls.
+http_request:
+  timeout: 10s
+  watchdog_timeout: 15s
+
+i2c:
+  sda: GPIO16
+  scl: GPIO15
+  scan: true
+  frequency: 80kHz
+
+spi:
+  clk_pin: GPIO12
+  mosi_pin: GPIO11
+  miso_pin: GPIO13
+
+output:
+  - platform: ledc
+    pin:
+      number: GPIO45
+      ignore_strapping_warning: true
+    id: backlight_pwm
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: "Display Backlight"
+    id: backlight
+    restore_mode: ALWAYS_ON
+
+display:
+  - platform: mipi_spi
+    model: ST7796
+    id: tft
+    cs_pin: GPIO10
+    dc_pin:
+      number: GPIO46
+      ignore_strapping_warning: true
+    data_rate: 40MHz
+    invert_colors: true   # this IPS panel draws colors inverted without it
+    auto_clear_enabled: false
+    update_interval: never
+
+touchscreen:
+  - platform: ft63x6
+    id: touch
+    address: 0x38
+    interrupt_pin: GPIO17
+    # If taps land in the wrong place, uncomment to log raw coordinates and/or add a transform:
+    # on_touch:
+    #   - logger.log:
+    #       format: "touch x=%d y=%d"
+    #       args: ['touch.x', 'touch.y']
+    # transform:
+    #   swap_xy: true
+    #   mirror_x: true
+
+# ---------- State ----------
+globals:
+  - id: selected_slot      # 1 to 4, 0 when idle
+    type: int
+    initial_value: '0'
+  - id: scan_uid           # scanned UID, uppercase hex, no separators (matches AMS tag_uid format)
+    type: std::string
+  - id: found_spool_id
+    type: int
+    initial_value: '0'
+
+# ---------- Helpers ----------
+script:
+  - id: show_result
+    parameters:
+      msg: string
+    then:
+      - lambda: 'lv_label_set_text(id(result_text), msg.c_str());'
+      - lvgl.page.show: result_page
+
+  - id: show_confirm
+    parameters:
+      msg: string
+    then:
+      - lambda: 'lv_label_set_text(id(confirm_text), msg.c_str());'
+      - lvgl.page.show: confirm_page
+
+  - id: poll_status
+    then:
+      - if:
+          condition:
+            lambda: 'return id(selected_slot) == 0;'
+          then:
+            - http_request.get:
+                url: ${bambuddy_url}/api/v1/printers/${printer_id}/status
+                request_headers:
+                  X-API-Key: !secret bambuddy_api_key
+                capture_response: true
+                max_response_buffer_size: 65536
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code != 200) {
+                          ESP_LOGW("ams", "status HTTP %d", response->status_code);
+                          return;
+                        }
+                        lv_obj_t *sw[4] = {id(slot1_swatch), id(slot2_swatch), id(slot3_swatch), id(slot4_swatch)};
+                        lv_obj_t *lb[4] = {id(slot1_lbl), id(slot2_lbl), id(slot3_lbl), id(slot4_lbl)};
+                        lv_obj_t *pc[4] = {id(slot1_pct), id(slot2_pct), id(slot3_pct), id(slot4_pct)};
+                        lv_obj_t *fl[4] = {id(slot1_fill), id(slot2_fill), id(slot3_fill), id(slot4_fill)};
+                        json::parse_json(body, [&](JsonObject root) -> bool {
+                          JsonArray ams = root["ams"];
+                          if (ams.isNull() || ams.size() == 0) {
+                            ESP_LOGW("ams", "no ams array in status");
+                            return false;
+                          }
+                          int hum = ams[0]["humidity"] | -1;
+                          float temp = ams[0]["temp"] | -1.0f;
+                          char info[48];
+                          snprintf(info, sizeof(info), "AMS  %d%% humidity   %.0f C", hum, temp);
+                          lv_label_set_text(id(hdr_info), info);
+                          JsonArray trays = ams[0]["tray"];
+                          for (JsonObject t : trays) {
+                            int i = t["id"] | -1;
+                            if (i < 0 || i > 3) continue;
+                            bool exists = t["exists"] | false;
+                            std::string type = t["tray_type"] | "";
+                            std::string sub = t["tray_sub_brands"] | "";
+                            std::string color = t["tray_color"] | "";
+                            int remain = t["remain"] | -1;
+                            std::string text = "Empty";
+                            std::string pct = "";
+                            if (exists) {
+                              text = sub.empty() ? type : sub;
+                              if (text.empty()) text = "Unknown";
+                              if (remain >= 0) pct = std::to_string(remain) + "%";
+                            }
+                            uint32_t rgb = 0x30363D;
+                            if (exists && color.size() >= 6) rgb = strtol(color.substr(0, 6).c_str(), nullptr, 16);
+                            int w = 0;
+                            if (exists && remain > 0) {
+                              w = 202 * remain / 100;
+                              if (w < 4) w = 4;
+                            }
+                            lv_label_set_text(lb[i], text.c_str());
+                            lv_label_set_text(pc[i], pct.c_str());
+                            lv_obj_set_style_bg_color(sw[i], lv_color_hex(rgb), 0);
+                            lv_obj_set_style_bg_color(fl[i], lv_color_hex(rgb), 0);
+                            lv_obj_set_width(fl[i], w);
+                          }
+                          return true;
+                        });
+                on_error:
+                  then:
+                    - logger.log: "AMS status request failed"
+
+interval:
+  - interval: 5s
+    then:
+      - script.execute: poll_status
+
+# ---------- NFC reader ----------
+pn532_i2c:
+  update_interval: 1s
+  on_tag:
+    then:
+      - if:
+          condition:
+            lambda: 'return id(selected_slot) > 0;'
+          then:
+            # A slot is waiting for a tag: normalise the UID and look the spool up.
+            - lambda: |-
+                std::string u;
+                for (char c : x) {
+                  if (c != '-' && c != ':') u += (char) toupper(c);
+                }
+                id(scan_uid) = u;
+                ESP_LOGI("nfc", "scanned UID %s", u.c_str());
+            - http_request.get:
+                url: ${spoolman_url}/api/v1/spool
+                capture_response: true
+                max_response_buffer_size: 65536
+                on_response:
+                  then:
+                    - lambda: |-
+                        int code = response->status_code;
+                        if (code != 200) {
+                          id(show_result).execute(("Lookup failed: HTTP " + std::to_string(code)).c_str());
+                          return;
+                        }
+                        // Spoolman keeps the tag as a JSON string in extra.tag, e.g. "\"04A1B2C3D4E5F6\"".
+                        auto clean = [](const char *in) {
+                          std::string out;
+                          for (const char *p = in; *p; p++) {
+                            char c = (char) toupper((unsigned char) *p);
+                            if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) out += c;
+                          }
+                          return out;
+                        };
+                        // The reply is a JSON array, so wrap it in an object for the parser.
+                        std::string wrapped = "{\"a\":" + body + "}";
+                        int sid = 0;
+                        std::string mat;
+                        std::string col;
+                        bool ok = json::parse_json(wrapped, [&](JsonObject root) -> bool {
+                          JsonArray arr = root["a"];
+                          for (JsonObject sp : arr) {
+                            if (sp["archived"] | false) continue;
+                            const char *tag = sp["extra"]["tag"] | "";
+                            if (clean(tag) == id(scan_uid)) {
+                              sid = sp["id"] | 0;
+                              mat = sp["filament"]["material"] | "";
+                              col = sp["filament"]["color_hex"] | "";
+                              break;
+                            }
+                          }
+                          return true;
+                        });
+                        if (!ok) {
+                          id(show_result).execute("Lookup failed: bad reply");
+                        } else if (sid > 0) {
+                          id(found_spool_id) = sid;
+                          std::string msg = "Assign spool #" + std::to_string(sid);
+                          if (!mat.empty()) msg += " (" + mat + ")";
+                          msg += "\nto slot " + std::to_string(id(selected_slot)) + "?";
+                          if (!col.empty() && col[0] == '#') col = col.substr(1);
+                          uint32_t rgb = 0x444444;
+                          if (col.size() >= 6) rgb = strtol(col.substr(0, 6).c_str(), nullptr, 16);
+                          lv_obj_set_style_bg_color(id(confirm_swatch), lv_color_hex(rgb), 0);
+                          id(show_confirm).execute(msg);
+                        } else {
+                          id(show_result).execute(("Unknown tag\n" + id(scan_uid)).c_str());
+                        }
+                on_error:
+                  then:
+                    - script.execute:
+                        id: show_result
+                        msg: "Lookup failed: no connection to Spoolman"
+          else:
+            # Idle: report the scan to Home Assistant (optional, delete the next line if you do not use HA).
+            - homeassistant.tag_scanned: !lambda 'return x;'
+            - logger.log:
+                format: "Tag UID: %s"
+                args: ['x.c_str()']
+
+# ---------- UI ----------
+lvgl:
+  rotation: 90          # landscape 480x320. Use 270 if the screen is upside down.
+  buffer_size: 25%
+  displays:
+    - tft
+  touchscreens:
+    - touch
+  bg_color: 0x0D1117
+  pages:
+    # Page 1: header plus the four AMS slot cards. Tap a card to start assigning.
+    - id: main_page
+      widgets:
+        - obj:
+            x: 0
+            y: 0
+            width: 480
+            height: 40
+            radius: 0
+            bg_color: 0x161B22
+            border_width: 0
+            clickable: false
+            scrollable: false
+        - label:
+            text: "Filament Selector"
+            text_font: montserrat_20
+            text_color: 0xE6EDF3
+            x: 14
+            y: 9
+        - label:
+            id: hdr_info
+            text: ""
+            text_font: montserrat_14
+            text_color: 0x8B949E
+            align: TOP_RIGHT
+            x: -14
+            y: 13
+        - button:
+            x: 8
+            y: 48
+            width: 226
+            height: 126
+            radius: 14
+            bg_color: 0x161B22
+            border_width: 1
+            border_color: 0x30363D
+            shadow_width: 0
+            pad_all: 0
+            on_short_click:
+              - lambda: 'id(selected_slot) = 1;'
+              - lvgl.label.update:
+                  id: scan_text
+                  text: "Assigning to Slot 1"
+              - lvgl.page.show: scan_page
+            widgets:
+              - obj:
+                  id: slot1_swatch
+                  x: 12
+                  y: 12
+                  width: 48
+                  height: 48
+                  radius: 24
+                  bg_color: 0x30363D
+                  border_width: 2
+                  border_color: 0x8B949E
+                  clickable: false
+                  scrollable: false
+              - label:
+                  text: "SLOT 1"
+                  text_font: montserrat_14
+                  text_color: 0x8B949E
+                  x: 72
+                  y: 12
+              - label:
+                  id: slot1_pct
+                  text: ""
+                  text_font: montserrat_24
+                  text_color: 0xE6EDF3
+                  x: 72
+                  y: 30
+              - label:
+                  id: slot1_lbl
+                  text: "-"
+                  text_font: montserrat_20
+                  text_color: 0xE6EDF3
+                  x: 12
+                  y: 72
+              - obj:
+                  x: 12
+                  y: 106
+                  width: 202
+                  height: 6
+                  radius: 3
+                  bg_color: 0x30363D
+                  border_width: 0
+                  clickable: false
+                  scrollable: false
+                  widgets:
+                    - obj:
+                        id: slot1_fill
+                        x: 0
+                        y: 0
+                        width: 0
+                        height: 6
+                        radius: 3
+                        bg_color: 0x2F81F7
+                        border_width: 0
+                        clickable: false
+                        scrollable: false
+        - button:
+            x: 246
+            y: 48
+            width: 226
+            height: 126
+            radius: 14
+            bg_color: 0x161B22
+            border_width: 1
+            border_color: 0x30363D
+            shadow_width: 0
+            pad_all: 0
+            on_short_click:
+              - lambda: 'id(selected_slot) = 2;'
+              - lvgl.label.update:
+                  id: scan_text
+                  text: "Assigning to Slot 2"
+              - lvgl.page.show: scan_page
+            widgets:
+              - obj:
+                  id: slot2_swatch
+                  x: 12
+                  y: 12
+                  width: 48
+                  height: 48
+                  radius: 24
+                  bg_color: 0x30363D
+                  border_width: 2
+                  border_color: 0x8B949E
+                  clickable: false
+                  scrollable: false
+              - label:
+                  text: "SLOT 2"
+                  text_font: montserrat_14
+                  text_color: 0x8B949E
+                  x: 72
+                  y: 12
+              - label:
+                  id: slot2_pct
+                  text: ""
+                  text_font: montserrat_24
+                  text_color: 0xE6EDF3
+                  x: 72
+                  y: 30
+              - label:
+                  id: slot2_lbl
+                  text: "-"
+                  text_font: montserrat_20
+                  text_color: 0xE6EDF3
+                  x: 12
+                  y: 72
+              - obj:
+                  x: 12
+                  y: 106
+                  width: 202
+                  height: 6
+                  radius: 3
+                  bg_color: 0x30363D
+                  border_width: 0
+                  clickable: false
+                  scrollable: false
+                  widgets:
+                    - obj:
+                        id: slot2_fill
+                        x: 0
+                        y: 0
+                        width: 0
+                        height: 6
+                        radius: 3
+                        bg_color: 0x2F81F7
+                        border_width: 0
+                        clickable: false
+                        scrollable: false
+        - button:
+            x: 8
+            y: 186
+            width: 226
+            height: 126
+            radius: 14
+            bg_color: 0x161B22
+            border_width: 1
+            border_color: 0x30363D
+            shadow_width: 0
+            pad_all: 0
+            on_short_click:
+              - lambda: 'id(selected_slot) = 3;'
+              - lvgl.label.update:
+                  id: scan_text
+                  text: "Assigning to Slot 3"
+              - lvgl.page.show: scan_page
+            widgets:
+              - obj:
+                  id: slot3_swatch
+                  x: 12
+                  y: 12
+                  width: 48
+                  height: 48
+                  radius: 24
+                  bg_color: 0x30363D
+                  border_width: 2
+                  border_color: 0x8B949E
+                  clickable: false
+                  scrollable: false
+              - label:
+                  text: "SLOT 3"
+                  text_font: montserrat_14
+                  text_color: 0x8B949E
+                  x: 72
+                  y: 12
+              - label:
+                  id: slot3_pct
+                  text: ""
+                  text_font: montserrat_24
+                  text_color: 0xE6EDF3
+                  x: 72
+                  y: 30
+              - label:
+                  id: slot3_lbl
+                  text: "-"
+                  text_font: montserrat_20
+                  text_color: 0xE6EDF3
+                  x: 12
+                  y: 72
+              - obj:
+                  x: 12
+                  y: 106
+                  width: 202
+                  height: 6
+                  radius: 3
+                  bg_color: 0x30363D
+                  border_width: 0
+                  clickable: false
+                  scrollable: false
+                  widgets:
+                    - obj:
+                        id: slot3_fill
+                        x: 0
+                        y: 0
+                        width: 0
+                        height: 6
+                        radius: 3
+                        bg_color: 0x2F81F7
+                        border_width: 0
+                        clickable: false
+                        scrollable: false
+        - button:
+            x: 246
+            y: 186
+            width: 226
+            height: 126
+            radius: 14
+            bg_color: 0x161B22
+            border_width: 1
+            border_color: 0x30363D
+            shadow_width: 0
+            pad_all: 0
+            on_short_click:
+              - lambda: 'id(selected_slot) = 4;'
+              - lvgl.label.update:
+                  id: scan_text
+                  text: "Assigning to Slot 4"
+              - lvgl.page.show: scan_page
+            widgets:
+              - obj:
+                  id: slot4_swatch
+                  x: 12
+                  y: 12
+                  width: 48
+                  height: 48
+                  radius: 24
+                  bg_color: 0x30363D
+                  border_width: 2
+                  border_color: 0x8B949E
+                  clickable: false
+                  scrollable: false
+              - label:
+                  text: "SLOT 4"
+                  text_font: montserrat_14
+                  text_color: 0x8B949E
+                  x: 72
+                  y: 12
+              - label:
+                  id: slot4_pct
+                  text: ""
+                  text_font: montserrat_24
+                  text_color: 0xE6EDF3
+                  x: 72
+                  y: 30
+              - label:
+                  id: slot4_lbl
+                  text: "-"
+                  text_font: montserrat_20
+                  text_color: 0xE6EDF3
+                  x: 12
+                  y: 72
+              - obj:
+                  x: 12
+                  y: 106
+                  width: 202
+                  height: 6
+                  radius: 3
+                  bg_color: 0x30363D
+                  border_width: 0
+                  clickable: false
+                  scrollable: false
+                  widgets:
+                    - obj:
+                        id: slot4_fill
+                        x: 0
+                        y: 0
+                        width: 0
+                        height: 6
+                        radius: 3
+                        bg_color: 0x2F81F7
+                        border_width: 0
+                        clickable: false
+                        scrollable: false
+
+    # Page 2: waiting for a tag.
+    - id: scan_page
+      widgets:
+        - obj:
+            align: CENTER
+            y: -35
+            width: 180
+            height: 180
+            radius: 90
+            bg_opa: TRANSP
+            border_width: 3
+            border_color: 0x1B3F73
+            clickable: false
+            scrollable: false
+        - obj:
+            align: CENTER
+            y: -35
+            width: 124
+            height: 124
+            radius: 62
+            bg_opa: TRANSP
+            border_width: 3
+            border_color: 0x2563B0
+            clickable: false
+            scrollable: false
+        - obj:
+            align: CENTER
+            y: -35
+            width: 68
+            height: 68
+            radius: 34
+            bg_opa: TRANSP
+            border_width: 3
+            border_color: 0x2F81F7
+            clickable: false
+            scrollable: false
+        - obj:
+            align: CENTER
+            y: -35
+            width: 20
+            height: 20
+            radius: 10
+            bg_color: 0x2F81F7
+            border_width: 0
+            clickable: false
+            scrollable: false
+        - label:
+            id: scan_text
+            text: "Assigning to Slot"
+            text_font: montserrat_20
+            text_color: 0xE6EDF3
+            align: CENTER
+            y: 78
+        - label:
+            text: "Hold a spool tag on the reader"
+            text_font: montserrat_14
+            text_color: 0x8B949E
+            align: CENTER
+            y: 104
+        - button:
+            x: 170
+            y: 268
+            width: 140
+            height: 44
+            radius: 14
+            bg_color: 0x30363D
+            border_width: 0
+            shadow_width: 0
+            on_short_click:
+              - lambda: 'id(selected_slot) = 0;'
+              - lvgl.page.show: main_page
+            widgets:
+              - label:
+                  text: "Cancel"
+                  text_font: montserrat_20
+                  text_color: 0xFFFFFF
+                  align: CENTER
+
+    # Page 3: confirm the assignment.
+    - id: confirm_page
+      widgets:
+        - obj:
+            id: confirm_swatch
+            align: TOP_MID
+            y: 22
+            width: 64
+            height: 64
+            radius: 32
+            bg_color: 0x30363D
+            border_width: 3
+            border_color: 0x8B949E
+            clickable: false
+            scrollable: false
+        - label:
+            id: confirm_text
+            text: ""
+            text_font: montserrat_24
+            text_color: 0xE6EDF3
+            text_align: CENTER
+            align: CENTER
+            y: 18
+        - button:
+            x: 36
+            y: 232
+            width: 196
+            height: 64
+            radius: 14
+            bg_color: 0x238636
+            border_width: 0
+            shadow_width: 0
+            on_short_click:
+              - http_request.post:
+                  url: ${bambuddy_url}${assign_path}
+                  request_headers:
+                    X-API-Key: !secret bambuddy_api_key
+                    Content-Type: application/json
+                  json: !lambda |-
+                    root["${assign_id_field}"] = id(found_spool_id);
+                    root["printer_id"] = ${printer_id};
+                    root["ams_id"] = 0;
+                    root["tray_id"] = id(selected_slot) - 1;
+                    root["move"] = true;
+                  capture_response: true
+                  max_response_buffer_size: 4096
+                  on_response:
+                    then:
+                      - lambda: |-
+                          int code = response->status_code;
+                          std::string msg;
+                          if (code >= 200 && code < 300) {
+                            msg = "Assigned to slot " + std::to_string(id(selected_slot));
+                          } else {
+                            msg = "Assign failed: HTTP " + std::to_string(code);
+                            ESP_LOGW("assign", "HTTP %d: %s", code, body.c_str());
+                          }
+                          id(selected_slot) = 0;
+                          id(show_result).execute(msg.c_str());
+                  on_error:
+                    then:
+                      - lambda: 'id(selected_slot) = 0;'
+                      - script.execute:
+                          id: show_result
+                          msg: "Assign failed: no connection to Bambuddy"
+            widgets:
+              - label:
+                  text: "Confirm"
+                  text_font: montserrat_24
+                  text_color: 0xFFFFFF
+                  align: CENTER
+        - button:
+            x: 248
+            y: 232
+            width: 196
+            height: 64
+            radius: 14
+            bg_color: 0x30363D
+            border_width: 0
+            shadow_width: 0
+            on_short_click:
+              - lambda: 'id(selected_slot) = 0;'
+              - lvgl.page.show: main_page
+            widgets:
+              - label:
+                  text: "Cancel"
+                  text_font: montserrat_24
+                  text_color: 0xFFFFFF
+                  align: CENTER
+
+    # Page 4: result of a lookup or an assignment.
+    - id: result_page
+      widgets:
+        - label:
+            id: result_text
+            text: ""
+            text_font: montserrat_24
+            text_color: 0xE6EDF3
+            text_align: CENTER
+            align: CENTER
+            y: -30
+        - button:
+            x: 150
+            y: 232
+            width: 180
+            height: 64
+            radius: 14
+            bg_color: 0x2F81F7
+            border_width: 0
+            shadow_width: 0
+            on_short_click:
+              - lambda: 'id(selected_slot) = 0;'
+              - lvgl.page.show: main_page
+              - script.execute: poll_status
+            widgets:
+              - label:
+                  text: "OK"
+                  text_font: montserrat_24
+                  text_color: 0xFFFFFF
+                  align: CENTER
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Filament-Selector Fallback"
+    password: !secret ap_password
+
+captive_portal:
