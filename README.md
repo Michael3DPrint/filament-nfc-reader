@@ -184,7 +184,28 @@ The assign flow does not need Home Assistant. Delete the `homeassistant.tag_scan
 | `Assign failed: HTTP 401` or `403` | Bambuddy authentication is on. Create an API key with Read and Inventory and put it in `bambuddy_api_key`. |
 | `Assign failed: HTTP 404` | Bambuddy could not find the printer or the Spoolman spool. Check `printer_id` and that Spoolman is connected in Bambuddy. |
 | Slot tiles stay empty | The status call failed. Check `bambuddy_url` and `printer_id`, and look for "no ams array in status" in the log. |
+| Bambu Studio shows the printer offline in LAN-only mode, although `ping` works | A stale Bambu Studio network-plugin file, not this firmware. See [Printer offline in LAN-only mode](#printer-offline-in-lan-only-mode). |
 | WiFi will not connect | Use a 2.4 GHz network, spell the SSID exactly as broadcast, and use WPA2 on channels 1 to 11. |
+
+### Printer offline in LAN-only mode
+
+If Bambu Studio shows the printer as offline while `ping` works and the printer's ports answer, the cause may be a stale or corrupted `BambuNetworkEngine.conf`, the configuration file of Bambu Studio's closed-source network plugin. Restarting Bambu Studio fixes it for a few days, and deleting or moving that file fixes it for longer. Close Bambu Studio, remove the file as below, and start it again. Bambu Studio recreates the file, and you may need to reconnect the printer.
+
+On macOS, move the file aside so you keep a backup:
+
+```
+mv ~/Library/Application\ Support/BambuStudio/BambuNetworkEngine.conf ~/Library/Application\ Support/BambuStudio/BambuNetworkEngine.conf-BACKUP
+```
+
+On Windows, run these in a command prompt:
+
+```
+del "%APPDATA%\BambuStudio\BambuNetworkEngine.conf"
+del "%APPDATA%\BambuStudio\BambuNetworkEngine.conf.bak"
+rmdir /s /q "%LOCALAPPDATA%\BambuStudio\WebView2Cache"
+```
+
+This comes from a [third-party blog post](https://robig.net/blog/posts/connect-to-bambulab-x2d-on-lan-only-mode/) written for a Bambu Lab X2D, and its author reports no connection problems since. The repository owner tried it and found the connection more stable. It affects only Bambu Studio's own connection. The NFC unit talks to Bambuddy, which does not use this file.
 
 ## Limitations
 

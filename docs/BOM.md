@@ -1,6 +1,6 @@
 # Bill of materials
 
-The build needs a display board, a PN532 module, a cable, NFC tags and a USB-C supply, plus a soldering iron, 10 screws and a printed case. No custom PCB is needed, but you solder four wires to the PN532. These are the parts used in the working build.
+The build needs a display board, a PN532 module, a cable, NFC tags and a USB-C supply, plus a soldering iron, 5 screws and a printed case. No custom PCB is needed, but you solder four wires to the PN532. These are the parts used in the working build.
 
 ## Required
 
@@ -22,12 +22,13 @@ The build needs a display board, a PN532 module, a cable, NFC tags and a USB-C s
 
 ## Case
 
-The printed case has five rigid parts and eight TPU washers, described in [hardware/case](../hardware/case/README.md). The fastener sizes below were measured from the v10 files.
+The printed case has five rigid parts, described in [hardware/case](../hardware/case/README.md). The fastener sizes below were measured from the v20 file.
 
 | Qty | Part | Notes |
 |---|---|---|
-| 10 | M3 x 8 mm screws, low-profile heads | One length fits all three screwed joints, and they go straight into the printed holes. The [case README](../hardware/case/README.md#fastening) lists where each one goes and why that length works. |
-| 1, optional | Superglue (cyanoacrylate) | Can replace the 2 arm-to-body screws, which leaves 8 screws to buy. See [Fastening](../hardware/case/README.md#fastening) for when to keep the screws. This is a suggestion that has not been tested. |
+| 4 | M3 x 8 mm screws, low-profile heads | Hold the display board to the standoffs. They go straight into the printed holes. See [How the parts hold together](../hardware/case/README.md#how-the-parts-hold-together). |
+| 1 | M3 x 6 mm screw, low-profile head | Stops the NFC arm sliding back off the case body. |
+| 1, optional | Superglue (cyanoacrylate) | Can replace the arm-to-body screw, which leaves the 4 board screws to buy. See [How the parts hold together](../hardware/case/README.md#how-the-parts-hold-together) for when to keep the screws. This is a suggestion that has not been tested. |
 | 4, optional | Stick-on feet, up to 9 mm across and 1.2 mm thick | They fit the recesses described in [Feet recesses](../hardware/case/README.md#feet-recesses). No foot size has been test-fitted. |
 
 ## Prototyping only

@@ -1,46 +1,40 @@
 # Case
 
-The case is five rigid parts printed in PLA and eight washers printed in TPU 95A. Both sets are Bambu Studio projects set up for a Bambu Lab X2D, and each prints on its own plate.
+The case is five rigid parts printed in PLA. They are one Bambu Studio project, `filament-selector-case_rigid-parts.3mf`, set up for a Bambu Lab X2D, with the parts split over two plates so each plate prints more reliably.
 
-| File | Contents |
-|---|---|
-| `filament-selector-case_rigid-parts.3mf` | All five rigid parts on one plate (see the table below) |
-| `filament-selector-case_tpu-washers.3mf` | Eight TPU 95A washers |
-
-| Rigid part | Purpose |
-|---|---|
-| Case_Body | Main housing for the display board |
-| Faceplate | Front plate around the screen |
-| NFC_Arm | Arm that holds the PN532 reader |
-| NFC_Top_Lid | Lid over the reader |
-| Spine_Cover | Cover for the back or spine |
-
-## Print settings in the projects
-
-Both projects use a 0.4 mm nozzle, the 0.20 mm Standard process, 2 walls, 15% sparse infill, no supports and an auto brim. They differ in material and plate:
-
-| | Rigid parts | TPU washers |
+| Rigid part | Plate | Purpose |
 |---|---|---|
-| Filament profile | Bambu PLA Metal | Bambu TPU 95A |
-| Plate | Supertack | Textured PEI |
+| Case_Body | 2 | Main housing for the display board |
+| Faceplate | 1 | Front plate around the screen |
+| NFC_Arm | 1 | Arm that holds the PN532 reader |
+| NFC_Top_Lid | 1 | Lid over the reader |
+| Spine_Cover | 1 | Cover for the back or spine |
 
-The projects open in Bambu Studio 2.x. Slice them again for a different printer.
+## Print settings in the project
 
-## Fastening
+The project uses a 0.4 mm nozzle, the 0.20 mm Standard process, 2 walls, 15% gyroid infill, no supports, an auto brim and the Textured PEI plate. It does not set a material for the parts: filament slot 1 is PLA, so choose your own PLA before slicing. The project opens in Bambu Studio 2.x. Slice it again for a different printer.
 
-The case needs 10 M3 x 8 mm screws, which go straight into the plastic, so no inserts are needed. One length works in all three places:
+## How the parts hold together
 
-| Joint | Screws | What the screw passes through | Pilot hole depth | Thread in the plastic with M3 x 8 |
+The case needs 5 screws, which go straight into the plastic, so no inserts or washers are needed. The lid and the NFC arm need almost none, because they are held by their shape:
+
+| Joint | Held by |
+|---|---|
+| NFC lid to arm | No screws. Four hooks on the lid's underside, two per side, each 10 mm long with a 0.6 mm barb, snap into a groove in the inner side walls of the arm. The lid drops straight down into a pocket in the top of the arm, and you pry it up to remove it. |
+| PN532 in the arm | Two 2.5 mm stops on the arm floor, 0.4 mm in front of the board's front edge, keep the board from sliding forward out of its holder. They are not locating pins and need no sockets. |
+| Arm to case body | The arm slides on from the back along two dovetail rails on top of the pillar, which carry its weight and hold it down. One M3 x 6 mm screw goes through the arm floor into the pillar wall and only stops the arm sliding back off. |
+| Display board to standoffs | Four M3 x 8 mm screws. |
+
+The screws, with the depths measured in the mesh:
+
+| Joint | Screws | What the screw passes through | Pilot hole depth | Thread in the plastic |
 |---|---|---|---|---|
-| NFC lid to arm | 4 | 0.7 mm of lid, below a 6.0 mm wide, 1.3 mm deep head recess | 10.0 mm, in the arm posts | 7.3 mm |
-| Arm to case body | 2 | 2.0 mm of arm floor, below a 6.4 mm wide, 3.0 mm deep head recess | 14.0 mm, in the body | 6.0 mm |
-| Display board to standoffs | 4 | 1.6 mm board plus two 0.4 mm TPU washers | 6.0 mm, in the standoffs | 5.6 mm |
+| Arm to case body | 1 x M3 x 6 | 2.1 mm of arm floor, below a 6.4 mm wide, 3.2 mm deep head recess | 9.0 mm, in the pillar | 3.9 mm |
+| Display board to standoffs | 4 x M3 x 8 | 1.6 mm of board | 7.0 mm, in the standoffs | 6.4 mm |
 
-Screws longer than 10.7 mm at the lid, 16 mm at the arm or 8.4 mm at the board would reach the bottom of their pilot holes. The board joint leaves only 0.4 mm to spare, so put a TPU washer under each screw head as well as under the board, which also accounts for the 8 washers for 4 screws. The build script confirms the washer under the board, and the one under each head is inferred from the count.
+A screw longer than 11.1 mm at the arm or 8.6 mm at the board would reach the bottom of its pilot hole. The pilot holes and recesses were measured in the v20 mesh by fitting cylinders to its walls. The screw lengths are calculated from those measurements and nothing was test-fitted. The hooks, grooves, rails and stops come from the owner's description and were not measured.
 
-The pilot holes and recesses were measured in the v10 mesh, and the washers are 6.4 mm across with a 3.2 mm bore and 0.4 mm thick. The screw lengths are calculated from those measurements and nothing was test-fitted.
-
-Superglue could replace the two arm-to-body screws, because the spine cover still opens the cavity behind the arm. Keep the lid and board screws if you may need to service the NFC module or the display. This is a suggestion that has not been tested.
+Superglue could replace the arm screw, because the spine cover still opens the cavity behind the arm. Keep the board screws if you may need to service the display. This is a suggestion that has not been tested.
 
 ## Feet recesses
 
