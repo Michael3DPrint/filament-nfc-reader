@@ -14,6 +14,8 @@ The table lists every document. `scripts/check.sh` fails if a file under `docs/d
 |---|---|
 | `README.md` | what it is, setup, configuration, troubleshooting |
 | `LICENSE` | the Apache License 2.0 that covers the project |
+| `THIRD_PARTY_NOTICES.md` | licenses of the programs the project talks to or builds with |
+| `SECURITY.md` | how to report a problem, design limits, what was checked |
 | `docs/BOM.md` | parts list |
 | `docs/API.md` | every outside call the firmware and setup make, with behavior notes |
 | `docs/wiring-diagram.svg` | PN532 to display board wiring |

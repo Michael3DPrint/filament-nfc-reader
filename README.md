@@ -195,3 +195,5 @@ The assign flow does not need Home Assistant. Delete the `homeassistant.tag_scan
 ## License
 
 This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
+
+Bambuddy (AGPL-3.0) and Spoolman (MIT) are separate programs that the unit talks to over HTTP, and no code from them is included. [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) has the details, and [SECURITY.md](SECURITY.md) explains how to report a problem and the design limits.
