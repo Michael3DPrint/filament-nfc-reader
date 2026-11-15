@@ -1,15 +1,16 @@
 # Filament Selector
 
-A small ESP32-S3 touchscreen unit that shows what is loaded in a Bambu Lab AMS and lets you assign a spool to a slot by scanning its NFC tag.
+Filament Selector is a small ESP32-S3 touchscreen unit that shows what is loaded in a Bambu Lab AMS and assigns a spool to a slot when you scan the spool's NFC tag. It looks the spool up in [Spoolman](https://github.com/Donkie/Spoolman) and records the assignment through [Bambuddy](https://github.com/maziggy/bambuddy). The author tested it with a Bambu Lab X2D with one AMS.
 
-1. The screen shows the four AMS slots with color, material, remaining percentage and a fill bar.
-2. Tap a slot.
-3. Hold a spool's NFC tag on the reader.
-4. Check the spool and color shown, then tap Confirm.
+To assign a spool:
 
-The spool is looked up in [Spoolman](https://github.com/Donkie/Spoolman) and assigned to the slot through [Bambuddy](https://github.com/maziggy/bambuddy). Tested with a Bambu Lab X2D with one AMS.
+1. Tap a slot. The main screen shows all four AMS slots with color, material, remaining percentage and a fill bar.
+2. Hold the spool's NFC tag on the reader.
+3. Check the spool and color shown, then tap Confirm.
 
 ## How it works
+
+The unit never talks to the printer. It reads slot data and writes assignments through Bambuddy, and it reads spool records from Spoolman. A scanned tag is matched by its UID against the `tag` extra field of each Spoolman spool.
 
 ```mermaid
 flowchart LR
@@ -22,116 +23,171 @@ flowchart LR
   E -. "optional tag_scanned event" .-> H[Home Assistant]
 ```
 
-- Slot data comes from Bambuddy's printer status.
-- The scanned tag's UID is matched against the `tag` extra field on each Spoolman spool.
-- Confirm sends the Spoolman spool id and the slot to Bambuddy's Spoolman slot-assignment endpoint.
+A scan ends in one of two places: the Confirm screen when the tag matches a spool, or the Result screen with a message when something goes wrong.
+
+```mermaid
+flowchart TD
+  M["Main screen<br/>four slot cards, refreshed every 5 s"] -- "tap a slot" --> S["Scan screen<br/>hold a spool tag on the reader<br/>(Cancel returns to Main)"]
+  S -- "tag read" --> L{"Look the tag up<br/>in Spoolman"}
+  L -- "spool found" --> C["Confirm screen<br/>spool, material, color, slot<br/>(Cancel returns to Main)"]
+  L -- "lookup failed<br/>or unknown tag" --> R["Result screen<br/>shows the message<br/>(OK returns to Main)"]
+  C -- "Confirm" --> A{"Assign in Bambuddy<br/>one attempt, no retry"}
+  A -- "assigned" --> R
+  A -- "assign failed" --> R
+```
+
+The Result screen shows one of these messages:
+
+| Message | Meaning |
+|---|---|
+| `Lookup failed: no connection to Spoolman` | Spoolman did not answer. |
+| `Lookup failed: HTTP <code>` | Spoolman answered with an error. |
+| `Lookup failed: bad reply` | The reply could not be read as a list of spools. |
+| `Unknown tag` and the UID | No active spool has this tag. |
+| `Assigned to slot <n>` | Bambuddy accepted the assignment. |
+| `Assign failed: HTTP <code>` | Bambuddy refused it. |
+| `Assign failed: no connection to Bambuddy` | Bambuddy did not answer. |
+
+Some behavior may surprise you:
+
+- Confirming changes Bambuddy only. Nothing is sent to the printer, and Spoolman's location field stays as it was.
+- Assigning a spool to a slot removes it from any other slot it was in.
+- Archived spools are ignored, and when two spools share a tag the first one in Spoolman's list wins.
+
+Every call the unit makes, with its address, authentication and body, is listed in [docs/API.md](docs/API.md).
 
 ## What you need
 
 ### Hardware
 
-See [docs/BOM.md](docs/BOM.md). In short: an ES3C40P 4.0" ESP32-S3 display board, a PN532 NFC module, a 4-pin MX1.25 cable and NFC tags. A printable case is in [hardware/case](hardware/case/README.md).
+You need an ES3C40P 4.0" ESP32-S3 display board, a PN532 NFC module, a 4-pin 1.25 mm cable, NFC tags and a soldering iron. [docs/BOM.md](docs/BOM.md) has the full list, and [hardware/case](hardware/case/README.md) has a printable case.
 
 ### Wiring
 
+Connect four wires from the PN532 to the display board's I2C socket, then set the PN532 to I2C mode.
+
 ![Wiring diagram](docs/wiring-diagram.svg)
 
-Four wires from the PN532 to the display board's IIC connector: 3V3, GND, SDA (GPIO16) and SCL (GPIO15). Set the PN532 to I2C mode (switch 1 ON, switch 2 OFF) and power-cycle it, because it only reads the switches at power-up.
+The I2C socket is 1.25 mm with 4 pins and is called P4 in the vendor's schematic. Its pins are:
+
+| Socket pin | Signal | Note |
+|---|---|---|
+| 1 | 3V3 | |
+| 2 | GND | |
+| 3 | SCL | GPIO15 |
+| 4 | SDA | GPIO16 |
+
+Find pin 1 on your board from the vendor's schematic, which the BOM links, and check it against the markings on the board before you wire. The PN532 header in the diagram runs VCC, SDA, SCL, GND, so the GND and SDA wires cross over the others. That header order comes from the author's wiring drawing and has not been checked on the module, so go by the labels printed on your module. The board also has SPI and UART sockets of the same size, so make sure you plug into the I2C one.
+
+The PN532 runs from the board's 3V3 pin, and the author's build works at 3.3 V.
+
+To set the PN532 to I2C mode, put switch 1 ON and switch 2 OFF, then power-cycle the module, because it reads the switches only at power-up.
 
 ### Software and services
 
+Bambuddy and Spoolman must be running, ESPHome must be installed on the machine you flash from, and the unit must be able to reach Bambuddy and Spoolman on your network. Power the unit from a 5 V USB-C supply.
+
 | What | Why | Notes |
 |---|---|---|
-| ESPHome (recent release) | Builds and flashes the firmware | Needs the `mipi_spi` display, `ft63x6` touchscreen and LVGL (with `rotation`) components, so use a current release. |
-| Bambuddy | Reports the AMS slots and assigns spools to slots | Your printer must already be added to Bambuddy. Spoolman must be connected in Bambuddy's settings. |
-| Spoolman | Holds your spool records and tags | Reachable from the ESP32 on your network. |
-| Home Assistant | Optional | Only used for the `tag_scanned` event on scans made outside the assign flow. See [Without Home Assistant](#without-home-assistant). |
+| ESPHome | Builds and flashes the firmware | Needs the `mipi_spi` display, `ft63x6` touchscreen and LVGL (with `rotation`) components, which a current release provides. |
+| Bambuddy 1.3.0 or newer | Reports the AMS slots and assigns spools to them | Version 1.3.0 added the `move` option that the firmware sends on Confirm. Your printer must already be added to Bambuddy, and Spoolman must be connected in Bambuddy's settings. |
+| Spoolman | Holds your spool records and tags | Needs a `tag` extra field (see [Tagging a spool](#tagging-a-spool)). Spoolman 0.27 and newer also keep tags as native tags. Bambuddy writes both kinds, and the firmware reads the `tag` extra field. |
+| Home Assistant (optional) | Receives a `tag_scanned` event | Used only for scans made outside the assign flow. See [Without Home Assistant](#without-home-assistant). |
 
-Everything must be reachable over plain HTTP on your local network. Do not expose these services to the internet for this.
+The author tested the latest releases as of 2026-11-14: ESPHome 2026.10.2, Bambuddy 1.3.1 and Spoolman 0.27.1. The Bambuddy minimum comes from reading its source history, not from testing an older version.
+
+The unit talks to Bambuddy and Spoolman over plain HTTP, so keep all of them on a trusted local network and do not expose them to the internet.
 
 ## Setup
 
 1. **Wire it** as shown above.
 2. **Create `esphome/secrets.yaml`** from [`secrets.yaml.example`](esphome/secrets.yaml.example) and fill it in.
 3. **Edit the config values** listed in [What to change and where](#what-to-change-and-where).
-4. **Tag your spools.** Each spool needs its tag's UID stored in its Spoolman record. See [Tagging a spool](#tagging-a-spool).
-5. **Flash** `esphome/filament-selector.yaml` with ESPHome. See [Flashing notes](#flashing-notes).
-6. **Check the log.** The I2C scan should list `0x24` (PN532) and `0x38` (touch).
-7. **Use it.** Tap a slot, scan a tagged spool, check the confirm screen and tap Confirm. Open Bambuddy to see the spool in the slot.
+4. **Flash** `esphome/filament-selector.yaml` with ESPHome. See [Flashing](#flashing).
+5. **Check the log.** The I2C scan should list `0x24` (PN532) and `0x38` (touch).
+6. **Tag your spools.** Each spool needs its tag's UID stored in its Spoolman record, and you read the UID from the running unit's log. See [Tagging a spool](#tagging-a-spool).
+7. **Use it.** Tap a slot, scan a tagged spool, check the Confirm screen and tap Confirm. Then open Bambuddy to see the spool in the slot.
 
 ## What to change and where
 
-Line numbers refer to `esphome/filament-selector.yaml` as committed.
+Names in this section are keys in `esphome/filament-selector.yaml`. Search the file for a key, or for "CHANGE ME".
 
 ### Required
 
 | Where | What to change |
 |---|---|
-| `esphome/secrets.yaml` (new file) | Set `wifi_ssid`, `wifi_password`, `api_encryption_key` (generate with `openssl rand -base64 32`) and `ap_password`. The WiFi must be 2.4 GHz. |
-| `filament-selector.yaml` line 9, `bambuddy_url` | Your Bambuddy address, for example `http://192.168.1.50:8000`. |
-| line 10, `spoolman_url` | Your Spoolman address, for example `http://192.168.1.50:7912`. |
-| line 11, `printer_id` | Your printer's id in Bambuddy. The value is also in the URL of API calls like `/api/v1/printers/<id>/status`. |
+| `esphome/secrets.yaml` (new file) | Set `wifi_ssid`, `wifi_password`, `api_encryption_key` (generate one with `openssl rand -base64 32`) and `ap_password`. The WiFi must be 2.4 GHz. |
+| `filament-selector.yaml`, `bambuddy_url` | Your Bambuddy address, for example `http://192.168.1.50:8000`. |
+| `spoolman_url` | Your Spoolman address, for example `http://192.168.1.50:7912`. |
+| `printer_id` | Your printer's id in Bambuddy. With one printer it is `1`, which is the default in the file. With several printers, list them with `GET /api/v1/printers/` (see [docs/API.md](docs/API.md)). |
 
 ### Only if Bambuddy authentication is on
 
 | Where | What to change |
 |---|---|
-| `secrets.yaml`, `bambuddy_api_key` | Create an API key in Bambuddy under Settings, API Keys, with the Read and Inventory permissions only. Paste it here. It is sent as the `X-API-Key` header on the status poll (line 128) and the assignment (line 717). If authentication is off, any value works. |
+| `secrets.yaml`, `bambuddy_api_key` | Create an API key in Bambuddy under Settings, API Keys, with only the Read and Inventory permissions, and paste it here. The firmware sends it as the `X-API-Key` header on the status poll and on the assignment. If authentication is off, any value works. |
 
 ### Only if your setup differs
 
 | Where | What to change |
 |---|---|
-| lines 16 and 17, `assign_path` and `assign_id_field` | Defaults assign a Spoolman spool. If your spools live in Bambuddy's own inventory, use `/api/v1/inventory/assignments` and `spool_id`. The tag lookup (around line 213) also searches Spoolman, so a local-inventory setup needs that lookup changed too. |
-| lines 148, 149 and 153, `ams[0]` | The status parser reads the first AMS unit. For a different unit, change the index. |
-| line 722, `root["ams_id"] = 0` | Must match the AMS unit above. Slots are `tray_id` 0 to 3. |
-| line 279, `rotation: 90` | Use `270` if the screen is upside down. |
-| line 74, `invert_colors: true` | Remove it if colors look inverted on your panel (black and white swapped). |
-| line 130 and 213, `max_response_buffer_size` | 65536 bytes fits roughly 80 spools. Raise it if you have more. |
-| lines 41 and 42, `sda` and `scl` | Pin choice for the I2C bus. The display board's connector and touch controller fix these, so leave them unless you rewire. |
-| line 20, `name` | Device name in Home Assistant and ESPHome. |
-| `touchscreen:` (line 78) | If taps land in the wrong place, uncomment the `on_touch` and `transform` hints in the file. |
-| line 272, `homeassistant.tag_scanned` | Delete this line if you do not use Home Assistant. |
+| `assign_path` and `assign_id_field` | The defaults assign a Spoolman spool. If your spools live in Bambuddy's own inventory, use `/api/v1/inventory/assignments` and `spool_id`, and change the tag lookup too, because it searches Spoolman. |
+| `ams[0]` in the status parser | The parser reads the first AMS unit. Change the index to read a different unit. |
+| `root["ams_id"] = 0` in the assignment request | Must match the unit chosen in the `ams[0]` row. Slots are `tray_id` 0 to 3. |
+| `rotation: 90` | Use `270` if the screen is upside down. |
+| `invert_colors: true` | Remove it if black and white are swapped on your panel. |
+| `max_response_buffer_size` (two places: status and spool lookup) | 65536 bytes fits roughly 80 spools by the author's estimate. Raise it if you have more. |
+| `sda` and `scl` | The I2C pins. The display board fixes them, so leave them unless you rewire. |
+| `name` | The device name in Home Assistant and ESPHome. |
+| `touchscreen:` | If taps land in the wrong place, uncomment the `on_touch` and `transform` hints in the file. |
+| `homeassistant.tag_scanned` | Delete this line if you do not use Home Assistant. |
 
 ## Tagging a spool
 
-The firmware matches the scanned tag's UID, as uppercase hex without separators, against the `tag` extra field on each Spoolman spool.
+The firmware finds a spool by matching the scanned tag's UID, as uppercase hex without separators, against the `tag` extra field on each Spoolman spool. Each spool therefore needs its tag's UID stored there.
 
-1. Scan the tag with the device idle (no slot selected) and read its UID from the ESPHome log, for example `Tag UID: 04-A1-B2-C3-D4-E5-F6`.
-2. Store it on the spool, for example `04A1B2C3D4E5F6`. Bambuddy's `PATCH /api/v1/spoolman/inventory/spools/{spool_id}/tag` writes it into Spoolman's `tag` extra field, or you can edit that field in Spoolman yourself. Bambuddy refuses a tag that another active spool already carries.
-3. If Spoolman has no `tag` field, add a text extra field named `tag` for spools under Spoolman's settings.
+1. Scan the tag with the unit idle (no slot selected) and read its UID from the ESPHome log, for example `Tag UID: 04-A1-B2-C3-D4-E5-F6`.
+2. Store the UID on the spool without separators, for example `04A1B2C3D4E5F6`. You can edit the `tag` field in Spoolman yourself, or use Bambuddy's tag endpoint (request and example in [docs/API.md](docs/API.md#calls-you-make-once-by-hand)). Bambuddy refuses a tag that another active spool already carries.
+3. If Spoolman has no `tag` field, add a text extra field named `tag` for spools in Spoolman's settings.
 
-Spoolman stores the value with quotes around it. The firmware strips everything except hex characters, so both forms match.
+Spoolman stores the value with quotes around it, and the firmware keeps only the hex characters, so both forms match.
 
-Bambu Lab spools with their own RFID store a long UUID in the same field. Those will not match a PN532 scan, but the AMS already tracks them.
+Bambu Lab spools with their own RFID store a long UUID in the same field. A PN532 scan will not match those, but the AMS already tracks them.
 
-## Flashing notes
+## Flashing
 
-- Docker Desktop on macOS cannot pass USB into a container. Flash and read the serial log from Chrome or Edge using the ESPHome dashboard at `http://localhost:6052`, or use web.esphome.io. Serial needs `localhost` or HTTPS.
-- The device logs over USB at first. After the first flash, updates work over WiFi.
+The first flash must go over USB. After that, updates work over WiFi.
+
+1. Install ESPHome (see [esphome.io](https://esphome.io)). ESPHome 2026.10.2 installed with Python 3.12 but failed to build on Python 3.15, so use a Python version your ESPHome release supports.
+2. Make sure `esphome/secrets.yaml` exists and the CHANGE ME values are filled in.
+3. Check the file with `esphome config esphome/filament-selector.yaml`. It should end with "Configuration is valid".
+4. Put the board in download mode, using the vendor's procedure: hold the BOOT key while connecting the USB-C cable, then release it. Alternatively, hold BOOT, press and release RESET, then release BOOT.
+5. Flash with `esphome run esphome/filament-selector.yaml` and pick the board's serial port when asked.
+
+If you run ESPHome in Docker on macOS, USB cannot be passed into the container. In that case flash and read the serial log from Chrome or Edge, using the ESPHome dashboard at `http://localhost:6052` or web.esphome.io. Serial access needs `localhost` or HTTPS.
 
 ## Without Home Assistant
 
-The config does not need Home Assistant for the assign flow. Delete the `homeassistant.tag_scanned` line (272). The `api:` block can stay, or you can remove it if you do not use ESPHome's native API.
+The assign flow does not need Home Assistant. Delete the `homeassistant.tag_scanned` line, and either keep the `api:` block or remove it if you do not use ESPHome's native API.
 
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |
 |---|---|
-| "Found no devices" on the I2C scan, or the PN532 is marked FAILED | Poor solder joints (the module's power LED can be on while data lines are broken), PN532 not in I2C mode, or SDA and SCL swapped. Check the switches, reflow the joints, then swap SDA and SCL at the connector. |
-| `0x38` missing from the scan | The touch controller did not answer. Confirm `sda: GPIO16` and `scl: GPIO15` and that the PN532 wires are not crossed. |
+| "Found no devices" on the I2C scan, or the PN532 is marked FAILED | Poor solder joints (the module's power LED can be on while the data lines are broken), PN532 not in I2C mode, or SDA and SCL swapped. Check the switches, reflow the joints, then swap SDA and SCL at the connector. |
+| `0x38` missing from the scan | The touch controller did not answer. Confirm `sda: GPIO16` and `scl: GPIO15`, then disconnect the PN532. If `0x38` returns, recheck the PN532 wiring. |
 | Screen colors are inverted | Add or remove `invert_colors: true`. |
-| Taps land in the wrong place | See the `touchscreen:` hints above. Log raw taps with `on_touch` and compare with the screen size (480 x 320 in landscape). |
-| "Unknown tag" after a scan | The tag's UID is not in any Spoolman spool's `tag` field. Check the UID in the log against the field. |
+| Taps land in the wrong place | See the `touchscreen:` hints above. Log raw taps with `on_touch` and compare them with the screen size (480 x 320 in landscape). |
+| `Unknown tag` after a scan | The tag's UID is not in any active spool's `tag` field. Compare the UID on the screen with the field, and check that the spool is not archived. |
+| `Lookup failed: bad reply` | Spoolman answered, but the reply could not be read as a list of spools. The likely cause is a reply larger than the 65536-byte buffer (many spools), so raise `max_response_buffer_size` for the lookup. This cause is inferred from the buffer size and has not been reproduced. |
 | `Lookup failed: HTTP` followed by a code | The Spoolman address in `spoolman_url` is wrong or unreachable. |
-| `Assign failed: HTTP 401` or `403` | Bambuddy authentication is on. Create an API key with Read and Inventory, put it in `bambuddy_api_key`. |
-| `Assign failed: HTTP 404` | The printer id or the Spoolman spool was not found. Check `printer_id`, and that Spoolman is connected in Bambuddy. |
+| `Assign failed: HTTP 401` or `403` | Bambuddy authentication is on. Create an API key with Read and Inventory and put it in `bambuddy_api_key`. |
+| `Assign failed: HTTP 404` | Bambuddy could not find the printer or the Spoolman spool. Check `printer_id` and that Spoolman is connected in Bambuddy. |
 | Slot tiles stay empty | The status call failed. Check `bambuddy_url` and `printer_id`, and look for "no ams array in status" in the log. |
 | WiFi will not connect | Use a 2.4 GHz network, spell the SSID exactly as broadcast, and use WPA2 on channels 1 to 11. |
 
 ## Limitations
 
-- Shows one AMS unit (four slots). Multiple units or an AMS HT need more tiles and the unit index changes.
-- The tag lookup downloads Spoolman's whole spool list on every scan. That is fine for a typical collection, but it grows with the number of spools.
-- Plain HTTP on a trusted LAN only.
-- The printable case is included, but the TPU washers it uses are not yet. See [hardware/case](hardware/case/README.md).
+- The unit shows one AMS unit (four slots). Multiple units or an AMS HT need more tiles and a different unit index.
+- Every scan downloads Spoolman's whole spool list. That is fine for a typical collection but grows with the number of spools.
+- The unit supports plain HTTP on a trusted local network only.
