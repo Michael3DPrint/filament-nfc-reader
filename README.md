@@ -191,3 +191,7 @@ The assign flow does not need Home Assistant. Delete the `homeassistant.tag_scan
 - The unit shows one AMS unit (four slots). Multiple units or an AMS HT need more tiles and a different unit index.
 - Every scan downloads Spoolman's whole spool list. That is fine for a typical collection but grows with the number of spools.
 - The unit supports plain HTTP on a trusted local network only.
+
+## License
+
+This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
