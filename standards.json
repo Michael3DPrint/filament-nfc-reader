@@ -1,0 +1,7 @@
+{
+  "max_lines": 400,
+  "source_ext": [".py", ".sh", ".yaml", ".yml"],
+  "line_limit_allowlist": {
+    "esphome/filament-selector.yaml": "single ESPHome file; owner decided on 2026-11-14 to keep it as one file"
+  }
+}
